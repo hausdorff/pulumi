@@ -77,6 +77,14 @@ func (pack *cloudPolicyPack) Publish(
 		return result.FromError(err)
 	}
 
+	for _, ai := range analyzerInfo.Policies {
+		fmt.Println(ai.Name)
+	}
+
+	fmt.Println()
+
+	fmt.Printf("Compressing Policy pack version at %q\n", op.Root)
+
 	dirArchive, err := archive.Process(op.Root, false)
 	if err != nil {
 		return result.FromError(err)

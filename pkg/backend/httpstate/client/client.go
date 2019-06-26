@@ -456,10 +456,14 @@ func (pc *Client) PublishPolicyPack(ctx context.Context, orgName string,
 		return errors.Wrapf(err, "Failed to upload compressed PolicyPack")
 	}
 
+	fmt.Println("Uploading PolicyPack to '" + resp.UploadURI + "'")
+
 	_, err = client.Do(putS3Req)
 	if err != nil {
 		return errors.Wrapf(err, "Failed to upload compressed PolicyPack")
 	}
+
+	fmt.Println("Success!")
 
 	return nil
 }

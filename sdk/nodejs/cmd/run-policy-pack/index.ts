@@ -37,10 +37,18 @@ const uncaughtHandler = (err: Error) => {
     }
 };
 
+// Keep track if we already logged the information about an unhandled error to the user..  If
+// so, we end with a different exit code.  The language host recognizes this and will not print
+// any further messages to the user since we already took care of it.
+//
+// 32 was picked so as to be very unlikely to collide with any of the error codes documented by
+// nodejs here:
+// https://github.com/nodejs/node-v0.x-archive/blob/master/doc/api/process.markdown#exit-codes
+export const nodeJSProcessExitedAfterLoggingUserActionableMessage = 32;
+
 process.on("uncaughtException", uncaughtHandler);
 process.on("unhandledRejection", uncaughtHandler);
 process.on("exit", (code: number) => {
-
     // If there were any uncaught errors at all, we always want to exit with an error code. If we
     // did not, it could be disastrous for the user.  i.e. not all resources may have been created,
     // but the 0 code would indicate we could proceed.  That could lead to many (or all) of the
@@ -56,7 +64,7 @@ process.on("exit", (code: number) => {
             }
         }
 
-        process.exitCode = run.nodeJSProcessExitedAfterLoggingUserActionableMessage;
+        process.exitCode = nodeJSProcessExitedAfterLoggingUserActionableMessage;
     }
 });
 
@@ -72,21 +80,7 @@ import * as run from "../../runtime/run";
 import * as minimist from "minimist";
 
 function usage(): void {
-    console.error(`usage: RUN <flags> [program] <[arg]...>`);
-    console.error(``);
-    console.error(`    where [flags] may include`);
-    console.error(`        --project=p         set the project name to p`);
-    console.error(`        --stack=s           set the stack name to s`);
-    console.error(`        --config.k=v...     set runtime config key k to value v`);
-    console.error(`        --parallel=p        run up to p resource operations in parallel (default is serial)`);
-    console.error(`        --query-mode        true to run pulumi in query mode`);
-    console.error(`        --dry-run           true to simulate resource changes, but without making them`);
-    console.error(`        --pwd=pwd           change the working directory before running the program`);
-    console.error(`        --monitor=addr      [required] the RPC address for a resource monitor to connect to`);
-    console.error(`        --engine=addr       the RPC address for a resource engine to connect to`);
-    console.error(`        --tracing=url       a Zipkin-compatible endpoint to send tracing data to`);
-    console.error(``);
-    console.error(`    and [program] is a JavaScript program to run in Node.js, and [arg]... optional args to it.`);
+    console.error(`usage: RUN [program]`);
 }
 
 function printErrorUsageAndExit(message: string): never {
@@ -98,68 +92,39 @@ function printErrorUsageAndExit(message: string): never {
 function main(args: string[]): void {
     // See usage above for the intended usage of this program, including flags and required args.
     const argv: minimist.ParsedArgs = minimist(args, {
-        boolean: [ "dry-run", "query-mode" ],
-        string: [ "project", "stack", "parallel", "pwd", "monitor", "engine", "tracing" ],
+        boolean: ["dry-run", "query-mode"],
+        string: ["project", "stack", "parallel", "pwd", "monitor", "engine", "tracing"],
         unknown: (arg: string) => {
             return true;
         },
         stopEarly: true,
     });
 
-    // If parallel was passed, validate it is an number
-    if (argv["parallel"]) {
-        if (isNaN(parseInt(argv["parallel"], 10))) {
-            return printErrorUsageAndExit(
-                `error: --parallel flag must specify a number: ${argv["parallel"]} is not a number`);
-        }
-    }
-
-    // Ensure a monitor address was passed
-    const monitorAddr = argv["monitor"];
-    if (!monitorAddr) {
-        return printErrorUsageAndExit(`error: --monitor=addr must be provided.`);
-    }
-
     // Finally, ensure we have a program to run.
-    if (argv._.length === 0) {
+    if (argv._.length !== 1) {
         return printErrorUsageAndExit("error: Missing program to execute");
     }
-
-    // Due to node module loading semantics, multiple copies of @pulumi/pulumi could be loaded at runtime. So we need
-    // to squirel these settings in the environment such that other copies which may be loaded later can recover them.
-    //
-    // Config is already an environment variaible set by the language plugin.
-    addToEnvIfDefined("PULUMI_NODEJS_PROJECT", argv["project"]);
-    addToEnvIfDefined("PULUMI_NODEJS_STACK", argv["stack"]);
-    addToEnvIfDefined("PULUMI_NODEJS_DRY_RUN", argv["dry-run"]);
-    addToEnvIfDefined("PULUMI_NODEJS_QUERY_MODE", argv["query-mode"]);
-    addToEnvIfDefined("PULUMI_NODEJS_PARALLEL", argv["parallel"]);
-    addToEnvIfDefined("PULUMI_NODEJS_MONITOR", argv["monitor"]);
-    addToEnvIfDefined("PULUMI_NODEJS_ENGINE", argv["engine"]);
 
     // Ensure that our v8 hooks have been initialized.  Then actually load and run the user program.
     v8Hooks.isInitializedAsync().then(() => {
         const promise: Promise<void> = run.run({
             argv,
-            programStarted: () => programRunning = true,
+            programStarted: () => (programRunning = true),
             reportLoggedError: (err: Error) => loggedErrors.add(err),
-            runInStack: true,
+            runInStack: false,
         });
 
-        // when the user's program completes successfully, set programRunning back to false.  That way, if the Pulumi
-        // scaffolding code ends up throwing an exception during teardown, it will get printed directly to the console.
+        // when the user's program completes successfully, set programRunning back to false.  That
+        // way, if the Pulumi scaffolding code ends up throwing an exception during teardown, it
+        // will get printed directly to the console.
         //
-        // Note: we only do this in the 'resolved' arg of '.then' (not the 'rejected' arg).  If the users code throws
-        // an exception, this promise will get rejected, and we don't want touch or otherwise intercept the exception
-        // or change the programRunning state here at all.
-        promise.then(() => { programRunning = false; });
+        // Note: we only do this in the 'resolved' arg of '.then' (not the 'rejected' arg).  If the
+        // users code throws an exception, this promise will get rejected, and we don't want touch
+        // or otherwise intercept the exception or change the programRunning state here at all.
+        promise.then(() => {
+            programRunning = false;
+        });
     });
-}
-
-function addToEnvIfDefined(key: string, value: string | undefined) {
-    if (value) {
-        process.env[key] = value;
-    }
 }
 
 main(process.argv.slice(2));
